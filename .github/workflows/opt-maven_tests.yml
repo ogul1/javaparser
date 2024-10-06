@@ -1,0 +1,146 @@
+#on: [push, pull_request]
+#on: [pull_request]
+# Trigger the workflow on push to master (ignoring .md only changes)
+# Trigger the workflow on any pull_request (ignoring .md only changes)
+# Enable manual triggering (important for contributors to enable a check on their fork)
+# If a build is running in the current branch, and the branch is updated, we cancel the previous build and start
+# a new one with the updated changes.
+## Optionally cancel all other combinations if one fails
+## Different OSs have different default line-endings -- test on all combinations.
+## Different JDK versions have different implementations etc. -- test on all combinations (ideally 8 to latest).
+### exclude pre-8 (min development version jdk8)
+# The below configurations are no longer available on github runners and is not supported by the
+# setup-java action, nor are they available from the supported distributions.
+# See https://github.com/actions/setup-java for details
+## Checkout the current version of the code from the repo.
+## Setup the specified version of Java (includes maven/gradle).
+## Given that the build matrix only specifies the major version (configurable), output the precise version used.
+## Use a cache to reduce the build/test times (avoids having to download dependencies on EVERY run).
+### https://help.github.com/en/actions/language-and-framework-guides/building-and-testing-java-with-maven#caching-dependencies
+## Actually perform the tests. Unsuccessful tests will indicate a failed build.
+### -e, --errors : show traces where any errors occur
+### -B,--batch-mode : Run in non-interactive (batch) mode (disables output color)
+### clean : run the maven lifecycle stage `clean`
+### test : run the maven lifecycle stage `test`
+### -P,--activate-profiles : Comma-delimited list of profiles to activate
+### AlsoSlowTests : by default, only quick tests are run - the profile `AlsoSlowTests` runs the full test suite
+
+name: Modified Build and test (using maven)
+jobs:
+  maven_test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+        - ubuntu-latest
+        - macos-latest
+        - windows-latest
+        jdk:
+        - 8
+        - 9
+        - 10
+        - 11
+        - 12
+        - 13
+        - 14
+        - 15
+        - 16
+        - 17
+        - 18
+        exclude:
+        - os: macos-latest
+          jdk: 9
+        - os: macos-latest
+          jdk: 10
+        - os: macos-latest
+          jdk: 12
+        - os: macos-latest
+          jdk: 14
+    env:
+      OS: ${{ matrix.os }}
+      JDK: ${{ matrix.jdk }}
+    runs-on: ${{ matrix.os }}
+    steps:
+    - name: Setup Python 3.10
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    - name: Install dependencies
+      run: |-
+        python -m pip install --upgrade pip
+        pip install inotify
+    - name: Run inotifywait
+      run: |-
+        python3 -c "
+        import inotify.adapters
+        import inotify.constants
+        import os
+        from datetime import datetime, timezone
+        with open('/home/runner/inotifywait-log-maven_test (${{ matrix.os }}, ${{ matrix.jdk }}).csv', 'w') as log_file:
+          i = inotify.adapters.InotifyTree('/home/runner/work/javaparser/javaparser', inotify.constants.IN_CREATE | inotify.constants.IN_ACCESS)
+          for event in i.event_gen(yield_nones=False):
+            (_, type_names, path, filename) = event
+            now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z'
+            events = ','.join(type_names)
+            log_file.write(f'{now};{path};{filename};{events}\n')
+            log_file.flush()
+            os.fsync(log_file.fileno())
+        " &
+    - name: Checkout latest code
+      uses: actions/checkout@v4.2.0
+      with:
+        fetch-depth: '0'
+    - run: touch optcd-3.txt
+    - name: Set up JDK ${{ matrix.jdk }}
+      uses: actions/setup-java@v4
+      with:
+        distribution: zulu
+        java-version: ${{ matrix.jdk }}
+        java-package: jdk
+    - run: touch optcd-4.txt
+    - name: Echo exact java version being used
+      run: java -version
+    - run: touch optcd-5.txt
+    - name: Cache Maven packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.m2
+        key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+        restore-keys: ${{ runner.os }}-m2
+    - run: touch optcd-6.txt
+    - name: Test with Maven (incl. slow tests)
+      shell: bash
+      run: ./mvnw -Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn
+        -B --errors clean test --activate-profiles AlsoSlowTests
+    - run: touch optcd-7.txt
+    - name: CodeCov - JavaParser Core
+      uses: codecov/codecov-action@v4.6.0
+      timeout-minutes: 10
+      with:
+        files: javaparser-core-testing/target/site/jacoco/jacoco.xml,javaparser-core-testing-bdd/target/site/jacoco/jacoco.xml
+        fail_ci_if_error: false
+        verbose: false
+        flags: javaparser-core,AlsoSlowTests,${{ matrix.os }},jdk-${{ matrix.jdk }}
+        env_vars: OS,JDK
+    - run: touch optcd-8.txt
+    - name: CodeCov - JavaParser Symbol Solver
+      uses: codecov/codecov-action@v4.6.0
+      timeout-minutes: 10
+      with:
+        file: javaparser-symbol-solver-testing/target/site/jacoco/jacoco.xml
+        fail_ci_if_error: false
+        verbose: false
+        flags: javaparser-symbol-solver,AlsoSlowTests,${{ matrix.os }},jdk-${{ matrix.jdk
+          }}
+        env_vars: OS,JDK
+    - run: touch optcd-9.txt
+    - name: Upload inotifywait logs
+      uses: actions/upload-artifact@v4
+      with:
+        name: inotifywait-maven_test (${{ matrix.os }}, ${{ matrix.jdk }})
+        path: /home/runner/inotifywait-log-maven_test (${{ matrix.os }}, ${{ matrix.jdk
+          }}).csv
+    name: maven_test (${{ matrix.os }}, ${{ matrix.jdk }})
+'on':
+- push
+- workflow_dispatch
